@@ -55,10 +55,10 @@ cp .env.example .env
 
 | Variable | Description |
 |---|---|
-| `DTBASE_URL` | PostgreSQL connection string (`?sslmode=require`) |
-| `HUBSPOT_ACCESS_TOKEN` | HubSpot Private App token (`pat-na2-…`) |
-| `HUBSPOT_PIPELINE_ID` | HubSpot Deal pipeline ID (e.g. `default`) |
-| `HUBSPOT_DEAL_STAGE_ID` | HubSpot Deal stage ID (e.g. `4512647919`) |
+| `DTBASE_URL` | PostgreSQL connection string |
+| `HUBSPOT_ACCESS_TOKEN` | HubSpot Private App token |
+| `HUBSPOT_PIPELINE_ID` | HubSpot Deal pipeline ID |
+| `HUBSPOT_DEAL_STAGE_ID` | HubSpot Deal stage ID |
 | `ORDER_WEBHOOK_SECRET` | 64-byte hex secret for HMAC-SHA256 signing |
 | `ADMIN_USERNAME` | Dashboard login username |
 | `ADMIN_PASSWORD_HASH` | Scrypt hash in format `salt:hash` |
