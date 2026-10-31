@@ -1,0 +1,105 @@
+{
+  "name": "Order to HubSpot Webhook Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "order-sync",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "11111111-1111-4111-a111-111111111111",
+      "name": "Order Webhook Ingest",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "order-sync-webhook"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_BASE_URL || 'http://localhost:3000' }}/api/webhooks/orders",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "={{ $env.ORDER_SIGNATURE_HEADER || 'x-order-signature' }}",
+              "value": "={{ $headers[$env.ORDER_SIGNATURE_HEADER ? $env.ORDER_SIGNATURE_HEADER.toLowerCase() : 'x-order-signature'] || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body ? (typeof $json.body === 'string' ? $json.body : JSON.stringify($json.body)) : '' }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "22222222-2222-4222-a222-222222222222",
+      "name": "Forward to Application Webhook (HMAC & Idempotency)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ $response.statusCode || 200 }}"
+        }
+      },
+      "id": "33333333-3333-4333-a333-333333333333",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Order Webhook Ingest": {
+      "main": [
+        [
+          {
+            "node": "Forward to Application Webhook (HMAC & Idempotency)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to Application Webhook (HMAC & Idempotency)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

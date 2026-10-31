@@ -30,8 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,25 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ── AI / Agent planning & internal files ──────────────────────────────────────
+AGENTS.md
+PROMPTS.md
+PHASE_PLAN.md
+PHASE_1_PLAN.md
+PROJECT_BLUEPRINT.md
+REPOSITORY_AUDIT.md
+DOCKER_COMPOSE_README.md
+README.original.md
+
+# ── Scratch / one-off utility scripts ─────────────────────────────────────────
+scripts/delete-bad-records.mjs
+scripts/__pycache__/
+
+# ── Generated / temp export files ─────────────────────────────────────────────
+/exports/
+/graphify-out/
+
+# ── Local n8n volume data (if running n8n locally via Docker) ─────────────────
+n8n-data/
+

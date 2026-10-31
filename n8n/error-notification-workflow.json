@@ -1,0 +1,104 @@
+{
+  "name": "Order Sync Error Notification",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "workflowName",
+              "value": "={{ $json.workflow.name }}"
+            },
+            {
+              "name": "executionId",
+              "value": "={{ $json.execution.id }}"
+            },
+            {
+              "name": "errorMessage",
+              "value": "={{ $json.execution.error.message || 'Unknown error' }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+      "name": "Format Incident Details",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INCIDENT_ALERT_WEBHOOK_URL || 'https://hooks.slack.com/services/REPLACE/WITH/WEBHOOK' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({\n  text: `🚨 *Order Sync Workflow Execution Failure*\\n*Workflow:* ${$json.workflowName}\\n*Execution ID:* ${$json.executionId}\\n*Timestamp:* ${$json.timestamp}\\n*Error:* ${$json.errorMessage}`\n}) }}",
+        "options": {}
+      },
+      "id": "cccccccc-cccc-4ccc-cccc-cccccccccccc",
+      "name": "Send Incident Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Incident Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Incident Details": {
+      "main": [
+        [
+          {
+            "node": "Send Incident Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

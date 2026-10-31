@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore
+# Files and directories excluded from the Docker build context.
+# This keeps the image lean and prevents secrets from leaking into the build.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Local secrets — must never enter the build context
+.env
+.env.local
+.env.*.local
+
+# Node.js runtime artefacts (rebuilt inside the image)
+node_modules/
+
+# Next.js build output (rebuilt inside the image)
+.next/
+
+# Development and test artefacts
+coverage/
+*.log
+npm-debug.log*
+
+# Version control
+.git/
+.gitignore
+
+# IDE and OS artefacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Python virtual environments and cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Prisma shadow DB / migration engine caches
+prisma/migrations/migration_lock.toml
+
+# Documentation and planning artefacts (not needed at runtime)
+*.md
+!README.md
+
+# Docker files themselves (avoids recursive inclusion)
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,105 @@
+// Prisma schema for Order-to-HubSpot sync
+// Prisma 7 — connection URL is configured in prisma.config.ts, not here.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // url is configured via prisma.config.ts for Prisma 7
+}
+
+/// Status of an order's HubSpot synchronization lifecycle.
+enum SyncStatus {
+  RECEIVED // Order webhook accepted and durably recorded
+  PROCESSING // Sync in progress (lease held)
+  SYNCED // Successfully synced to HubSpot
+  FAILED // Sync failed after exhausting retries or a permanent error
+}
+
+enum JobStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+/// Durable record of a unique order. Stores the minimum validated order data
+/// needed to retry sync without requiring the sender to resend the webhook.
+model OrderSync {
+  id      String @id @default(cuid())
+  orderId String @unique @map("order_id")
+
+  // Minimal validated order data persisted for retry (JSON)
+  // Contains: customer email/name/phone, items, currency, total, created_at.
+  // Retention: kept until the order is synced and any audit period expires.
+  orderData Json @map("order_data")
+
+  status SyncStatus @default(RECEIVED)
+
+  // HubSpot IDs (strings — never parse as numbers)
+  hubspotContactId String? @map("hubspot_contact_id")
+  hubspotDealId    String? @map("hubspot_deal_id")
+
+  // Processing lease: timestamp when current processing claim expires.
+  // Used for atomic conditional updates to prevent concurrent sync.
+  claimedUntil DateTime? @map("claimed_until")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  syncedAt  DateTime? @map("synced_at")
+
+  attempts SyncAttempt[]
+  jobs     SyncJob[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("order_syncs")
+}
+
+/// Immutable record of a single sync/retry attempt against HubSpot.
+/// One OrderSync can have many SyncAttempts. Never duplicates the full
+/// order payload — references the parent OrderSync for retry data.
+model SyncAttempt {
+  id String @id @default(cuid())
+
+  orderSync   OrderSync @relation(fields: [orderSyncId], references: [id])
+  orderSyncId String    @map("order_sync_id")
+
+  attemptNumber Int        @map("attempt_number")
+  status        SyncStatus @default(PROCESSING)
+
+  // HubSpot IDs observed during this specific attempt
+  hubspotContactId String? @map("hubspot_contact_id")
+  hubspotDealId    String? @map("hubspot_deal_id")
+
+  // Safe error information (no PII, secrets, or raw provider payloads)
+  errorCategory String? @map("error_category")
+  errorMessage  String? @map("error_message")
+
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  @@unique([orderSyncId, attemptNumber])
+  @@index([orderSyncId, startedAt(sort: Desc)])
+  @@index([startedAt(sort: Desc)])
+  @@map("sync_attempts")
+}
+
+/// Durable job record used by the background worker to process syncs.
+model SyncJob {
+  id          String    @id @default(cuid())
+  orderSync   OrderSync @relation(fields: [orderSyncId], references: [id])
+  orderSyncId String    @map("order_sync_id")
+  status      JobStatus @default(PENDING) @map("status")
+  attempts    Int       @default(0) @map("attempts")
+  nextRetryAt DateTime? @map("next_retry_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([nextRetryAt])
+  @@map("sync_jobs")
+}

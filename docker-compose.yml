@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker Compose configuration for Order-to-HubSpot Integration
+#
+# Production Database: Aiven for PostgreSQL (accessed via DTBASE_URL).
+# No unnecessary local PostgreSQL service is launched for the main application.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: order-hubspot-cms:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Database connection to Aiven PostgreSQL (with encrypted TLS / sslmode=require)
+      - DTBASE_URL=${DTBASE_URL}
+      - DIRECT_DTBASE_URL=${DIRECT_DTBASE_URL:-}
+      # HubSpot credentials and configuration
+      - HUBSPOT_ACCESS_TOKEN=${HUBSPOT_ACCESS_TOKEN}
+      - HUBSPOT_API_VERSION=${HUBSPOT_API_VERSION:-2026-09}
+      - HUBSPOT_PIPELINE_ID=${HUBSPOT_PIPELINE_ID}
+      - HUBSPOT_DEAL_STAGE_ID=${HUBSPOT_DEAL_STAGE_ID}
+      # Webhook HMAC secret and headers
+      - ORDER_WEBHOOK_SECRET=${ORDER_WEBHOOK_SECRET}
+      - ORDER_SIGNATURE_HEADER=${ORDER_SIGNATURE_HEADER:-x-order-signature}
+      - MAX_REQUEST_BYTES=${MAX_REQUEST_BYTES:-65536}
+      # Dashboard authentication
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - AUTH_SECRET=${AUTH_SECRET}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Standalone worker for background sync jobs (bonus/optional service)
+  # Uses the same built image to execute the sync background worker if needed
+  sync-worker:
+    image: order-hubspot-cms:latest
+    restart: unless-stopped
+    command: ["node", "scripts/process-sync-jobs.js"]
+    environment:
+      - NODE_ENV=production
+      - DTBASE_URL=${DTBASE_URL}
+      - HUBSPOT_ACCESS_TOKEN=${HUBSPOT_ACCESS_TOKEN}
+      - HUBSPOT_PIPELINE_ID=${HUBSPOT_PIPELINE_ID}
+      - HUBSPOT_DEAL_STAGE_ID=${HUBSPOT_DEAL_STAGE_ID}
+      - ORDER_WEBHOOK_SECRET=${ORDER_WEBHOOK_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+    profiles: ["worker"]
+
+  # Optional local mock/development n8n workflow runner
+  # Runs only when explicitly requested using --profile n8n
+  n8n:
+    image: n8nio/n8n:1.27.0
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-0.0.0.0}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://localhost:5678/
+    volumes:
+      - n8n-data:/home/node/.n8n
+    profiles: ["n8n"]
+
+volumes:
+  n8n-data:
