@@ -1,154 +1,173 @@
-# Valve & Tee — Order-to-HubSpot Integration
+# Order-to-HubSpot Integration & Sync Dashboard
 
-A production-ready e-commerce order synchronization system built with **Next.js**, **Prisma**, **Aiven PostgreSQL**, and **HubSpot CRM**. Features a live storefront, HMAC-secured webhook pipeline, idempotent sync engine, authenticated operations dashboard, Python CSV exporter, Docker support, and n8n automation workflows.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 16 (App Router, TypeScript) |
-| Database | Aiven PostgreSQL + Prisma ORM 7 |
-| CRM | HubSpot CRM v3 API (Contacts, Deals, Associations) |
-| Auth | `crypto.scryptSync` + `jose` JWT cookies |
-| Webhook Security | HMAC-SHA256 signed payloads |
-| Styling | Tailwind CSS v4 |
-| Testing | Vitest (42 tests) |
-| Exporter | Python 3 (stdlib only) |
-| Containers | Docker + Docker Compose |
-| Automation | n8n workflow JSON templates |
+A resilient, production-ready order synchronization demonstration system built with Next.js App Router (TypeScript), Aiven for PostgreSQL, Prisma ORM, and HubSpot CRM APIs. It ingests HMAC-SHA256 signed order webhooks, guarantees concurrent and delivery idempotency, syncs customer and order data into HubSpot CRM Contacts and Deals, records per-attempt audit trails, provides an authenticated dashboard for viewing attempts and manually retrying failures, features an interactive customer-facing demo storefront, and exports Deals to CSV via a standalone Python utility.
 
 ---
 
-## Features
+## 1. Architecture & Flow
 
-- **Storefront** — Interactive product catalog at `/` with cart, randomizable customer form, and HMAC-signed simulated checkout.
-- **Webhook Ingestion** — `POST /api/webhooks/orders` verifies HMAC-SHA256 signatures, validates payload with Zod, and enforces a 64 KB size cap.
-- **Idempotent Sync Engine** — Atomic DB claim lease prevents duplicate processing; deduplicates by `order_id`; upserts HubSpot Contact + Deal and associates them.
-- **Operations Dashboard** — Authenticated at `/dashboard`; shows latest 50 sync attempts with status, HubSpot IDs, error messages, and a **Retry** button for failed syncs.
-- **Python CSV Exporter** — `scripts/export_recent_deals.py` fetches HubSpot deals created in the last 7 days and writes a UTF-8 CSV for accounting.
-- **Export Deals Button** — Dashboard button calls `GET /api/export-deals` which runs the Python script server-side and streams the CSV as a file download.
-- **Docker** — Multi-stage `Dockerfile` + `docker-compose.yml` for containerised deployment.
-- **n8n Automation** — Importable workflow JSON for webhook proxying and error alerting.
+```mermaid
+flowchart TD
+    Store[Storefront / Mock Sender] -->|POST /api/webhooks/orders + HMAC| Route[Next.js Webhook Route]
+    Route --> SizeCheck{Request Size & Content-Type}
+    SizeCheck -->|Valid| HMAC[Raw-Body HMAC-SHA256 Verification]
+    HMAC -->|Verified| Schema[Zod Payload Schema Validation]
+    Schema -->|Valid| SyncSvc[Order Sync Service]
+    
+    subgraph OrderSyncService [Order Sync Service & Persistence]
+        SyncSvc --> DBCheck[(Aiven PostgreSQL via Prisma)]
+        DBCheck --> Claim[Atomic Conditional Claim Lease]
+        Claim --> HSReconcile[Reconcile Remote Deal by external_order_id]
+        HSReconcile --> HSContact[Search or Upsert Contact]
+        HSContact --> HSDeal[Create Deal & Associate to Contact]
+        HSDeal --> DBAudit[Persist SyncAttempt & SyncJob State]
+    end
+
+    subgraph OperationsDashboard [Protected Operations Dashboard]
+        Admin[Operations Admin] -->|Login| Auth[Scrypt & Signed JWT Session]
+        Auth --> DashboardView[Dashboard: Latest 50 Sync Attempts]
+        DashboardView -->|Click Retry on Failed Row| RetryRoute[POST /api/sync-attempts/:id/retry]
+        RetryRoute -->|Re-read DB state & replay| SyncSvc
+    end
+
+    subgraph PythonExporter [Python Deal Exporter]
+        CLI[scripts/export_deals.py] -->|Search API createdate >= 7d UTC cutoff| HubSpotAPI[HubSpot CRM v3 Search]
+        HubSpotAPI --> CSV[UTF-8 CSV Output]
+    end
+```
+
+### End-to-End Ingestion Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Storefront / Webhook Sender
+    participant API as /api/webhooks/orders
+    participant DB as Aiven PostgreSQL (Prisma)
+    participant HS as HubSpot CRM API
+
+    Client->>API: POST order.created (X-Order-Signature: sha256=<hex>)
+    API->>API: Enforce size cap (MAX_REQUEST_BYTES) & Content-Type: application/json
+    API->>API: Verify HMAC-SHA256 over exact raw request bytes
+    API->>API: Parse JSON & validate with Zod schema (decimal-safe totals)
+    API->>DB: Upsert OrderSync row (idempotency key: order_id)
+    API->>DB: Conditionally claim exclusive processing lease (claimedUntil)
+    alt Order already synced
+        API-->>Client: 200 OK (status: duplicate_completed)
+    else Lease held by concurrent worker
+        API-->>Client: 409 Conflict (status: duplicate_processing)
+    else Lease acquired
+        API->>HS: Search Contact by normalized email
+        HS-->>API: Contact found / null
+        API->>HS: Create or update Contact
+        API->>HS: Search Deal by external_order_id
+        alt Deal exists (e.g. from previous remote timeout)
+            API->>API: Reuse existing Deal ID
+        else Deal missing
+            API->>HS: Create Deal with external_order_id
+        end
+        API->>HS: Associate Deal with Contact
+        API->>DB: Record SyncAttempt (SYNCED), update OrderSync
+        API-->>Client: 200 OK (status: synced)
+    end
+```
 
 ---
 
-## Prerequisites
+## 2. Technology Stack & Key Libraries
 
-- **Node.js** >= 20.x
-- **npm** >= 9.x
-- **Python** >= 3.9
-- **Docker & Docker Compose** (optional)
-- **Aiven PostgreSQL** database with TLS
-- **HubSpot Private App** access token with CRM scopes
+- **Framework & Runtime:** Next.js 16 (App Router), Node.js v20/v22/v24.
+- **Language & Type Safety:** TypeScript strict mode, Zod 4.
+- **Database & ORM:** Aiven for PostgreSQL with TLS, Prisma ORM 7 (`@prisma/adapter-pg`).
+- **CRM Integration:** HubSpot CRM APIs (Contacts, Deals, Associations, Search), centralized on API version `2026-09`.
+- **Authentication & Security:** Native `crypto.scryptSync` / `timingSafeEqual`, `jose` JWT cookies (`HttpOnly`, `SameSite=lax`), HMAC-SHA256 signature verification.
+- **Data Exporter:** Python 3 (standard library: `urllib.request`, `csv`, `json`, `argparse`).
+- **Styling:** Tailwind CSS v4.
+- **Containerization:** Multi-stage Dockerfile and Docker Compose.
+- **Workflow Automation (Bonus):** n8n exportable workflows.
 
 ---
 
-## Environment Setup
+## 3. Prerequisites & Environment Setup
 
-Copy `.env.example` to `.env` and fill in your values:
+### Prerequisites
+- Node.js >= 20.x (Node 22 LTS recommended)
+- npm >= 9.x
+- Python >= 3.9 (for CSV export script and tests)
+- Docker & Docker Compose (optional, for containerized run)
+- Aiven PostgreSQL database instance (or compatible PostgreSQL with TLS)
+- HubSpot Private App access token with CRM scopes
+
+### Environment Variables
+Copy `.env.example` to `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Description |
-|---|---|
-| `DTBASE_URL` | PostgreSQL connection string |
-| `HUBSPOT_ACCESS_TOKEN` | HubSpot Private App token |
-| `HUBSPOT_PIPELINE_ID` | HubSpot Deal pipeline ID |
-| `HUBSPOT_DEAL_STAGE_ID` | HubSpot Deal stage ID |
-| `ORDER_WEBHOOK_SECRET` | 64-byte hex secret for HMAC-SHA256 signing |
-| `ADMIN_USERNAME` | Dashboard login username |
-| `ADMIN_PASSWORD_HASH` | Scrypt hash in format `salt:hash` |
-| `AUTH_SECRET` | JWT session signing key (min 32 chars) |
-
-### Required HubSpot Private App Scopes
-
-- `crm.objects.contacts.read` / `write`
-- `crm.objects.deals.read` / `write`
-- `crm.schemas.deals.read`
-- `crm.objects.associations.write`
-
-### Required HubSpot Custom Property
-
-Create a Deal property with internal name **`external_order_id`** (type: single-line text) in your HubSpot portal before first use.
+| Variable | Description | Example / Default |
+|---|---|---|
+| `DTBASE_URL` | PostgreSQL connection string (TLS enabled) | `postgres://avnadmin:...@...aivencloud.com:port/defaultdb?sslmode=require` |
+| `DIRECT_DTBASE_URL` | Direct connection for migrations (if using PgBouncer) | Optional |
+| `HUBSPOT_ACCESS_TOKEN` | HubSpot Private App Access Token | `pat-na1-...` |
+| `HUBSPOT_API_VERSION` | HubSpot CRM API version | `2026-09` |
+| `HUBSPOT_PIPELINE_ID` | HubSpot Deal Pipeline ID | `default` |
+| `HUBSPOT_DEAL_STAGE_ID` | HubSpot Deal Stage ID | `appointmentscheduled` |
+| `ORDER_WEBHOOK_SECRET` | Shared secret for HMAC-SHA256 signing | `your-secret-hex-string` |
+| `ORDER_SIGNATURE_HEADER` | Header name containing the signature | `x-order-signature` |
+| `MAX_REQUEST_BYTES` | Maximum payload size in bytes | `65536` (64 KB) |
+| `ADMIN_USERNAME` | Operations dashboard admin username | `admin` |
+| `ADMIN_PASSWORD_HASH` | Scrypt password hash (`salt:hash`) | Generated via script / seed |
+| `AUTH_SECRET` | Secret key for JWT session cookies (min 32 chars) | `your-random-32-character-secret...` |
+| `NODE_ENV` | Application environment | `development` / `production` / `test` |
 
 ---
 
-## Installation & Running
+## 4. Database Setup & Prisma Migrations
 
-```bash
-# Install dependencies
-npm install
+This project uses **Prisma 7** configured via `prisma.config.ts`.
 
-# Generate Prisma client
-npx prisma generate
+1. Generate Prisma Client:
+   ```bash
+   npx prisma generate
+   ```
 
-# Apply DB migrations to Aiven PostgreSQL
-npx prisma migrate deploy
+2. Apply migrations to Aiven PostgreSQL:
+   ```bash
+   npx prisma migrate deploy
+   ```
 
-# Start development server
-npm run dev
-```
-
-App runs at **http://localhost:3000**.
-
----
-
-## Usage
-
-### Storefront
-
-1. Visit `http://localhost:3000`
-2. Add items to cart, fill in customer details, and place a simulated order
-3. The server signs the payload with HMAC-SHA256 and sends it through the webhook pipeline
-
-### Dashboard
-
-1. Visit `http://localhost:3000/dashboard` and log in
-2. View sync attempt history, HubSpot Contact/Deal IDs, and error details
-3. Click **Retry** on failed rows to replay the sync
-4. Click **Export Deals CSV** to download a CSV of HubSpot deals from the last 7 days
-
-### Python CSV Exporter (CLI)
-
-```bash
-# Requires HUBSPOT_ACCESS_TOKEN in environment or .env
-python scripts/export_recent_deals.py --output exports/deals.csv
-
-# Optional: look back more than 7 days
-python scripts/export_recent_deals.py --days 14 --output exports/deals_14d.csv
-```
+3. (For development schema changes):
+   ```bash
+   npx prisma migrate dev --name <migration-name>
+   ```
 
 ---
 
-## Database Setup
+## 5. HubSpot CRM Setup & Scopes
 
-```bash
-# Generate Prisma Client
-npx prisma generate
+### Required HubSpot Private App Permissions:
+- `crm.objects.contacts.read`
+- `crm.objects.contacts.write`
+- `crm.objects.deals.read`
+- `crm.objects.deals.write`
 
-# Apply migrations
-npx prisma migrate deploy
-
-# (Dev only) Create a new migration after schema changes
-npx prisma migrate dev --name <migration-name>
-```
+### Configuration:
+1. Ensure the custom property `external_order_id` is created on Deals in your HubSpot portal (type: text, searchable).
+2. Set `HUBSPOT_PIPELINE_ID` and `HUBSPOT_DEAL_STAGE_ID` in your `.env` to match the target pipeline and stage in your HubSpot portal.
 
 ---
 
-## Webhook Signing Protocol
+## 6. Webhook Signing Protocol
 
-All order payloads must carry an HMAC-SHA256 signature over the **exact raw request bytes**:
+External and internal senders must calculate an HMAC-SHA256 signature using `ORDER_WEBHOOK_SECRET` over the **exact raw request bytes** (before JSON parsing):
 
-```
+```text
 Header: X-Order-Signature: sha256=<hex_digest>
 ```
+*(Both `sha256=<hex>` and bare `<hex>` formats are accepted).*
 
-Example payload:
-
+### Canonical Order Payload:
 ```json
 {
   "event": "order.created",
@@ -160,7 +179,14 @@ Example payload:
     "last_name": "Santos",
     "phone": "+639171234567"
   },
-  "items": [{ "sku": "TSH-BLK-M", "name": "Black Tee (M)", "qty": 2, "price": 450.00 }],
+  "items": [
+    {
+      "sku": "TSH-BLK-M",
+      "name": "Black Tee (M)",
+      "qty": 2,
+      "price": 450.00
+    }
+  ],
   "currency": "PHP",
   "total": 900.00
 }
@@ -168,77 +194,123 @@ Example payload:
 
 ---
 
-## Testing
+## 7. Local Startup & Demonstration
+
+### Local Development Server:
+```bash
+npm run dev
+```
+The server starts at `http://localhost:3000`.
+
+### Storefront Demo:
+1. Navigate to `http://localhost:3000/`.
+2. Browse products from the server-controlled catalog (e.g. *Black Tee (M)*).
+3. Add items to cart and review line totals.
+4. Proceed to checkout, fill in customer information, and submit order.
+5. The checkout server computes canonical prices, signs the payload with HMAC-SHA256, and submits to the webhook receiver.
+6. The order confirmation displays the generated `order_id` and provides a direct link to the operations dashboard.
+
+### Dashboard Access & Authentication:
+1. Navigate to `http://localhost:3000/dashboard` (or `/login`).
+2. Log in with `ADMIN_USERNAME` and password.
+3. The dashboard lists the **latest 50 sync attempts** with status indicators, attempt counts, Deal IDs, and error messages.
+4. For failed syncs, an authorized **Retry** button replays the idempotent sync service without creating duplicates.
+
+### Mock Sample Webhook Sender:
+```bash
+npx tsx scripts/send-sample-order.ts
+```
+Sends a signed order directly to `http://localhost:3000/api/webhooks/orders` and logs the server response.
+
+---
+
+## 8. Python CSV Deal Exporter
+
+The standalone Python CLI exports Deals created during the previous 7 days (UTC) to a standardized accounting CSV file.
+
+### Usage:
+```bash
+# Run with default 7-day filter (outputs to exports/deals_<timestamp>.csv):
+python scripts/export_deals.py
+
+# Or specify custom output path and lookback window:
+python scripts/export_deals.py --output exports/my_deals.csv --days 7
+```
+
+### Features:
+- Safe atomic output: writes to a temporary file (`.tmp`) and publishes only on success.
+- Handles pagination across all matching Deals.
+- Gracefully handles empty results and rate-limiting (`429` with backoff).
+- Standardized columns: `Deal ID`, `Deal Name`, `Amount`, `Currency`, `Create Date (UTC)`, `Close Date (UTC)`, `Pipeline`, `Stage`.
+
+---
+
+## 9. Verification & Test Commands
+
+All test and verification commands run deterministically:
 
 ```bash
-# Full TypeScript test suite (42 tests, 12 suites)
+# 1. Run full TypeScript/Node.js test suite (42 tests, 12 suites)
 npm test
 
-# TypeScript strict type check
+# 2. Run Python exporter test suite (7 tests)
+python -m unittest discover -s tests -p "test_*.py"
+
+# 3. TypeScript strict type-check
 npm run type-check
 
-# ESLint
+# 4. ESLint linting
 npm run lint
+
+# 5. Production Next.js build
+npm run build
 ```
 
 ---
 
-## Docker
+## 10. Docker Setup (Bonus)
+
+A multi-stage `Dockerfile` and `docker-compose.yml` are provided:
 
 ```bash
-# Build image
+# Build the container image:
 docker compose build
 
-# Start application
+# Start the application:
 docker compose up -d
 
-# Run migrations inside container
-docker compose run --rm app npx prisma migrate deploy
-
-# View logs
+# View container logs:
 docker compose logs -f app
 
-# Stop
+# Run database migrations inside container:
+docker compose run --rm app npx prisma migrate deploy
+
+# Stop containers:
 docker compose down
 ```
 
----
-
-## n8n Automation (Optional)
-
-Two importable workflow templates are in `n8n/`:
-
-| File | Purpose |
-|---|---|
-| `order-sync-workflow.json` | Receives orders at `POST /webhook/order-sync` and forwards to `/api/webhooks/orders` with raw body + signature intact |
-| `error-notification-workflow.json` | Fires on any n8n execution failure and posts an alert to Slack / Discord / Teams |
-
-**To use:**
-1. Run n8n: `docker compose --profile n8n up` or `npx n8n`
-2. Import both JSON files via **Workflows → Import from File**
-3. Set n8n environment variables: `APP_BASE_URL`, `INCIDENT_ALERT_WEBHOOK_URL`
-4. Link the error workflow as the error handler for the sync workflow
-5. Activate both workflows
+### Docker Features:
+- Base: `node:22-alpine` with non-root user (`nextjs:nodejs`).
+- No secrets baked into the image (`.dockerignore` protects `.env*`).
+- Built-in container health check hitting `/api/health`.
+- Connects directly to Aiven PostgreSQL (no unnecessary local PostgreSQL service).
 
 ---
 
-## Project Structure
+## 11. n8n Workflows (Bonus)
 
-```
-.
-├── app/                    # Next.js App Router pages & API routes
-│   ├── page.tsx            # Storefront (/)
-│   ├── dashboard/          # Operations dashboard (/dashboard)
-│   ├── login/              # Auth (/login)
-│   └── api/                # API routes (webhooks, checkout, export, retry)
-├── src/
-│   ├── lib/                # Core logic (auth, HubSpot, sync service, env, prisma)
-│   └── generated/prisma/   # Prisma generated client
-├── prisma/                 # Schema and migrations
-├── scripts/                # Python exporter + TS worker scripts
-├── tests/                  # Vitest test suites
-├── n8n/                    # n8n workflow JSON templates
-├── docker-compose.yml
-├── Dockerfile
-└── .env.example
-```
+Located in `n8n/`:
+- `n8n/order-sync-workflow.json`: Complete orchestration workflow for webhook reception, validation, and forwarding to the application pipeline.
+- `n8n/error-workflow.json`: Error notification workflow for alerting on failed sync attempts.
+- See `n8n/README.md` for import instructions and environment configuration.
+
+---
+
+## 12. Known Assumptions & Future Improvements
+
+- **Floating-point rounding:** Currencies with decimal fractions (such as PHP centavos) are validated using integer minor unit arithmetic (`Math.round(val * 100)`) with 1-cent rounding tolerance.
+- **Deal Close Date:** Placed orders set `closedate` to the order's `created_at` timestamp in milliseconds.
+- **Future Improvements:**
+  - Dedicated background queue runner (e.g. BullMQ / Redis) for enterprise multi-tenant horizontal scaling.
+  - HubSpot Line Items CRM object sync in addition to Deal level amount/currency.
+  - Two-factor authentication (TOTP) on the operations dashboard.
